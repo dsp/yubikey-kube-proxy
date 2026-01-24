@@ -10,11 +10,9 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"syscall"
 
 	"github.com/go-piv/piv-go/piv"
 	"github.com/spf13/cobra"
-	"golang.org/x/term"
 	"k8s.io/client-go/tools/clientcmd"
 )
 
@@ -154,10 +152,10 @@ func runProxy(cmd *cobra.Command, args []string) error {
 	}
 
 	// Get private key handle (YubiKey as crypto oracle)
+	// We use PINPolicyNever since the key is imported with touch-only policy.
+	// This also skips attestation-based policy detection which fails for imported keys.
 	priv, err := yk.PrivateKey(slot, cert.PublicKey, piv.KeyAuth{
-		PINPrompt: func() (string, error) {
-			return promptPIN()
-		},
+		PINPolicy: piv.PINPolicyNever,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to get private key handle from YubiKey: %w", err)
@@ -191,7 +189,7 @@ func runProxy(cmd *cobra.Command, args []string) error {
 	// Start server
 	addr := fmt.Sprintf("localhost:%d", proxyPort)
 	log.Printf("Starting proxy on %s -> %s", addr, cluster.Server)
-	log.Printf("Using YubiKey certificate from slot %s", proxySlot)
+	log.Printf("Using YubiKey certificate from slot %s (touch required for each request)", proxySlot)
 	log.Printf("Press Ctrl+C to stop")
 
 	return http.ListenAndServe(addr, proxy)
@@ -212,12 +210,3 @@ func parseSlot(s string) (piv.Slot, error) {
 	}
 }
 
-func promptPIN() (string, error) {
-	fmt.Print("Enter YubiKey PIN: ")
-	pin, err := term.ReadPassword(int(syscall.Stdin))
-	fmt.Println() // newline after hidden input
-	if err != nil {
-		return "", fmt.Errorf("failed to read PIN: %w", err)
-	}
-	return string(pin), nil
-}
