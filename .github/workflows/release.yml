@@ -1,0 +1,45 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpcsclite-dev
+
+      - name: Build binaries
+        run: |
+          mkdir -p dist
+          GOOS=linux GOARCH=amd64 go build -o dist/yubikey-kube-proxy-linux-amd64 .
+          GOOS=linux GOARCH=arm64 go build -o dist/yubikey-kube-proxy-linux-arm64 .
+          GOOS=darwin GOARCH=amd64 go build -o dist/yubikey-kube-proxy-darwin-amd64 .
+          GOOS=darwin GOARCH=arm64 go build -o dist/yubikey-kube-proxy-darwin-arm64 .
+
+      - name: Create checksums
+        run: |
+          cd dist
+          sha256sum * > checksums.txt
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*
+          generate_release_notes: true

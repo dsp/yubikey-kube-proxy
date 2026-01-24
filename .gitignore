@@ -1,0 +1,24 @@
+# Devenv
+.devenv*
+devenv.local.nix
+devenv.local.yaml
+
+# direnv
+.direnv
+
+# pre-commit
+.pre-commit-config.yaml
+
+# Nix
+result
+result-*
+
+# Go
+vendor/
+yubikey-kube-proxy
+
+# Kubeconfig files (may contain secrets)
+*.kubeconfig
+*.yml
+!devenv.yaml
+!.github/**/*.yml
