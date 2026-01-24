@@ -189,7 +189,7 @@ func runProxy(cmd *cobra.Command, args []string) error {
 	// Start server
 	addr := fmt.Sprintf("localhost:%d", proxyPort)
 	log.Printf("Starting proxy on %s -> %s", addr, cluster.Server)
-	log.Printf("Using YubiKey certificate from slot %s (touch required for each request)", proxySlot)
+	log.Printf("Using YubiKey certificate from slot %s", proxySlot)
 	log.Printf("Press Ctrl+C to stop")
 
 	return http.ListenAndServe(addr, proxy)
@@ -209,4 +209,3 @@ func parseSlot(s string) (piv.Slot, error) {
 		return piv.Slot{}, fmt.Errorf("unknown PIV slot %q (valid: 9a, 9c, 9d, 9e)", s)
 	}
 }
-

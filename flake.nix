@@ -17,7 +17,7 @@
 
           src = ./.;
 
-          vendorHash = null; # Will need to be set after first build attempt
+          vendorHash = "sha256-O0W90fLo7Sgzose6UwMVCIcHIcqUQ+xxvZAB7uqtqGQ=";
 
           nativeBuildInputs = [ pkgs.pkg-config pkgs.makeWrapper ];
 

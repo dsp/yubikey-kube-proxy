@@ -122,11 +122,11 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to write temp key file: %w", err)
 	}
 
-	// Import key to YubiKey with touch-only policy (no PIN required)
-	fmt.Fprintf(os.Stderr, "Importing private key to YubiKey slot %s (touch required, no PIN)...\n", setupSlot)
+	// Import key to YubiKey (no PIN, no touch required)
+	fmt.Fprintf(os.Stderr, "Importing private key to YubiKey slot %s...\n", setupSlot)
 	importKeyCmd := exec.Command("ykman", "piv", "keys", "import",
 		"--pin-policy=never",
-		"--touch-policy=always",
+		"--touch-policy=never",
 		setupSlot, keyFile)
 	importKeyCmd.Stdin = os.Stdin
 	importKeyCmd.Stdout = os.Stderr
