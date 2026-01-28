@@ -9,8 +9,23 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    runs-on: ubuntu-latest
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+          - os: ubuntu-24.04-arm
+            goos: linux
+            goarch: arm64
+          - os: macos-13
+            goos: darwin
+            goarch: amd64
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -19,18 +34,32 @@ jobs:
         with:
           go-version: '1.23'
 
-      - name: Install dependencies
+      - name: Install dependencies (Linux)
+        if: matrix.goos == 'linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libpcsclite-dev
 
-      - name: Build binaries
+      - name: Build binary
         run: |
           mkdir -p dist
-          GOOS=linux GOARCH=amd64 go build -o dist/yubikey-kube-proxy-linux-amd64 .
-          GOOS=linux GOARCH=arm64 go build -o dist/yubikey-kube-proxy-linux-arm64 .
-          GOOS=darwin GOARCH=amd64 go build -o dist/yubikey-kube-proxy-darwin-amd64 .
-          GOOS=darwin GOARCH=arm64 go build -o dist/yubikey-kube-proxy-darwin-arm64 .
+          go build -o dist/yubikey-kube-proxy-${{ matrix.goos }}-${{ matrix.goarch }} .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: yubikey-kube-proxy-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
 
       - name: Create checksums
         run: |

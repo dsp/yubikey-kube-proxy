@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/go-piv/piv-go/piv"
 	"github.com/spf13/cobra"
@@ -17,10 +18,11 @@ import (
 )
 
 var (
-	proxyKubeconfig string
-	proxyContext    string
-	proxyPort       int
-	proxySlot       string
+	proxyKubeconfig  string
+	proxyContext     string
+	proxyPort        int
+	proxySlot        string
+	proxyKeepAlives  bool
 )
 
 var proxyCmd = &cobra.Command{
@@ -41,6 +43,7 @@ func init() {
 	proxyCmd.Flags().StringVar(&proxyContext, "context", "", "Context to use for server/CA info (default: current-context)")
 	proxyCmd.Flags().IntVar(&proxyPort, "port", 8080, "Port to listen on")
 	proxyCmd.Flags().StringVar(&proxySlot, "slot", "9a", "YubiKey PIV slot containing the certificate")
+	proxyCmd.Flags().BoolVar(&proxyKeepAlives, "keep-alives", false, "Enable HTTP keep-alives (reduces latency but YubiKey removal won't immediately revoke access)")
 }
 
 func runProxy(cmd *cobra.Command, args []string) error {
@@ -152,7 +155,7 @@ func runProxy(cmd *cobra.Command, args []string) error {
 	}
 
 	// Get private key handle (YubiKey as crypto oracle)
-	// We use PINPolicyNever since the key is imported with touch-only policy.
+	// We use PINPolicyNever since the key is imported without PIN requirement.
 	// This also skips attestation-based policy detection which fails for imported keys.
 	priv, err := yk.PrivateKey(slot, cert.PublicKey, piv.KeyAuth{
 		PINPolicy: piv.PINPolicyNever,
@@ -161,8 +164,14 @@ func runProxy(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to get private key handle from YubiKey: %w", err)
 	}
 
+	// Warn if TLS verification is disabled
+	if cluster.InsecureSkipTLSVerify {
+		log.Printf("WARNING: TLS certificate verification is disabled (insecure-skip-tls-verify)")
+	}
+
 	// Create TLS config with YubiKey-backed client certificate
 	tlsConfig := &tls.Config{
+		MinVersion: tls.VersionTLS12,
 		Certificates: []tls.Certificate{
 			{
 				Certificate: [][]byte{cert.Raw},
@@ -176,7 +185,17 @@ func runProxy(cmd *cobra.Command, args []string) error {
 	// Create reverse proxy
 	proxy := httputil.NewSingleHostReverseProxy(serverURL)
 	proxy.Transport = &http.Transport{
-		TLSClientConfig: tlsConfig,
+		TLSClientConfig:       tlsConfig,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
+		// By default, disable keep-alives to force new TLS handshake per request.
+		// This ensures each request requires the YubiKey to sign,
+		// so removing the YubiKey immediately prevents further requests.
+		DisableKeepAlives: !proxyKeepAlives,
+	}
+
+	if proxyKeepAlives {
+		log.Printf("WARNING: Keep-alives enabled - YubiKey removal won't immediately revoke access")
 	}
 
 	// Modify the director to update the host header
