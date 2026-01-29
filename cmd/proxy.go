@@ -1,28 +1,20 @@
 package cmd
 
 import (
-	"crypto/tls"
-	"crypto/x509"
 	"fmt"
 	"log"
 	"net/http"
-	"net/http/httputil"
-	"net/url"
-	"os"
-	"path/filepath"
-	"time"
 
-	"github.com/go-piv/piv-go/piv"
+	"github.com/dsp/yubikey-kube-proxy/internal/proxy"
 	"github.com/spf13/cobra"
-	"k8s.io/client-go/tools/clientcmd"
 )
 
 var (
-	proxyKubeconfig  string
-	proxyContext     string
-	proxyPort        int
-	proxySlot        string
-	proxyKeepAlives  bool
+	proxyKubeconfig string
+	proxyContext    string
+	proxyPort       int
+	proxySlot       string
+	proxyKeepAlives bool
 )
 
 var proxyCmd = &cobra.Command{
@@ -53,178 +45,30 @@ func runProxy(cmd *cobra.Command, args []string) error {
 	}
 
 	// Load kubeconfig
-	kubeconfigPath := proxyKubeconfig
-	if kubeconfigPath == "" {
-		kubeconfigPath = os.Getenv("KUBECONFIG")
-	}
-	if kubeconfigPath == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return fmt.Errorf("failed to get home directory: %w", err)
-		}
-		kubeconfigPath = filepath.Join(home, ".kube", "config")
-	}
-
-	config, err := clientcmd.LoadFromFile(kubeconfigPath)
-	if err != nil {
-		return fmt.Errorf("failed to load kubeconfig: %w", err)
-	}
-
-	// Determine context
-	contextName := proxyContext
-	if contextName == "" {
-		contextName = config.CurrentContext
-	}
-	if contextName == "" {
-		return fmt.Errorf("no context specified and no current-context set")
-	}
-
-	ctx, ok := config.Contexts[contextName]
-	if !ok {
-		return fmt.Errorf("context %q not found in kubeconfig", contextName)
-	}
-
-	// Get cluster info
-	cluster, ok := config.Clusters[ctx.Cluster]
-	if !ok {
-		return fmt.Errorf("cluster %q not found for context %q", ctx.Cluster, contextName)
-	}
-
-	serverURL, err := url.Parse(cluster.Server)
-	if err != nil {
-		return fmt.Errorf("failed to parse server URL %q: %w", cluster.Server, err)
-	}
-
-	if serverURL.Scheme != "https" {
-		return fmt.Errorf("server URL must use HTTPS, got %q", cluster.Server)
-	}
-
-	// Build CA cert pool
-	var caCertPool *x509.CertPool
-	if len(cluster.CertificateAuthorityData) > 0 {
-		caCertPool = x509.NewCertPool()
-		if !caCertPool.AppendCertsFromPEM(cluster.CertificateAuthorityData) {
-			return fmt.Errorf("failed to parse CA certificate data")
-		}
-	} else if cluster.CertificateAuthority != "" {
-		caPath := cluster.CertificateAuthority
-		if !filepath.IsAbs(caPath) {
-			caPath = filepath.Join(filepath.Dir(kubeconfigPath), caPath)
-		}
-		caData, err := os.ReadFile(caPath)
-		if err != nil {
-			return fmt.Errorf("failed to read CA certificate from %s: %w", caPath, err)
-		}
-		caCertPool = x509.NewCertPool()
-		if !caCertPool.AppendCertsFromPEM(caData) {
-			return fmt.Errorf("failed to parse CA certificate from %s", caPath)
-		}
-	} else if !cluster.InsecureSkipTLSVerify {
-		// Use system CA pool
-		caCertPool, err = x509.SystemCertPool()
-		if err != nil {
-			return fmt.Errorf("failed to load system CA pool: %w", err)
-		}
-	}
-
-	// Open YubiKey
-	cards, err := piv.Cards()
-	if err != nil {
-		return fmt.Errorf("failed to enumerate smart cards: %w", err)
-	}
-	if len(cards) == 0 {
-		return fmt.Errorf("no YubiKey found - please insert your YubiKey")
-	}
-
-	yk, err := piv.Open(cards[0])
-	if err != nil {
-		return fmt.Errorf("failed to open YubiKey: %w", err)
-	}
-	defer yk.Close()
-
-	// Map slot string to piv.Slot
-	slot, err := parseSlot(proxySlot)
+	loadedConfig, err := proxy.LoadKubeconfig(proxyKubeconfig, proxyContext)
 	if err != nil {
 		return err
 	}
 
-	// Get certificate from YubiKey
-	cert, err := yk.Certificate(slot)
+	// Open YubiKey and get credentials
+	creds, err := proxy.OpenYubiKey(proxySlot)
 	if err != nil {
-		return fmt.Errorf("failed to get certificate from YubiKey slot %s: %w", proxySlot, err)
+		return err
 	}
+	defer creds.YK.Close()
 
-	// Get private key handle (YubiKey as crypto oracle)
-	// We use PINPolicyNever since the key is imported without PIN requirement.
-	// This also skips attestation-based policy detection which fails for imported keys.
-	priv, err := yk.PrivateKey(slot, cert.PublicKey, piv.KeyAuth{
-		PINPolicy: piv.PINPolicyNever,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to get private key handle from YubiKey: %w", err)
-	}
+	// Log security warnings
+	proxy.LogSecurityWarnings(loadedConfig.InsecureSkipTLSVerify, proxyKeepAlives)
 
-	// Warn if TLS verification is disabled
-	if cluster.InsecureSkipTLSVerify {
-		log.Printf("WARNING: TLS certificate verification is disabled (insecure-skip-tls-verify)")
-	}
-
-	// Create TLS config with YubiKey-backed client certificate
-	tlsConfig := &tls.Config{
-		MinVersion: tls.VersionTLS12,
-		Certificates: []tls.Certificate{
-			{
-				Certificate: [][]byte{cert.Raw},
-				PrivateKey:  priv,
-			},
-		},
-		RootCAs:            caCertPool,
-		InsecureSkipVerify: cluster.InsecureSkipTLSVerify,
-	}
-
-	// Create reverse proxy
-	proxy := httputil.NewSingleHostReverseProxy(serverURL)
-	proxy.Transport = &http.Transport{
-		TLSClientConfig:       tlsConfig,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ResponseHeaderTimeout: 30 * time.Second,
-		// By default, disable keep-alives to force new TLS handshake per request.
-		// This ensures each request requires the YubiKey to sign,
-		// so removing the YubiKey immediately prevents further requests.
-		DisableKeepAlives: !proxyKeepAlives,
-	}
-
-	if proxyKeepAlives {
-		log.Printf("WARNING: Keep-alives enabled - YubiKey removal won't immediately revoke access")
-	}
-
-	// Modify the director to update the host header
-	originalDirector := proxy.Director
-	proxy.Director = func(req *http.Request) {
-		originalDirector(req)
-		req.Host = serverURL.Host
-	}
+	// Create TLS config and reverse proxy
+	tlsConfig := proxy.CreateTLSConfig(creds, loadedConfig.CACertPool, loadedConfig.InsecureSkipTLSVerify)
+	reverseProxy := proxy.CreateReverseProxy(loadedConfig.ServerURL, tlsConfig, proxyKeepAlives)
 
 	// Start server
 	addr := fmt.Sprintf("localhost:%d", proxyPort)
-	log.Printf("Starting proxy on %s -> %s", addr, cluster.Server)
+	log.Printf("Starting proxy on %s -> %s", addr, loadedConfig.ServerURL)
 	log.Printf("Using YubiKey certificate from slot %s", proxySlot)
 	log.Printf("Press Ctrl+C to stop")
 
-	return http.ListenAndServe(addr, proxy)
-}
-
-func parseSlot(s string) (piv.Slot, error) {
-	switch s {
-	case "9a":
-		return piv.SlotAuthentication, nil
-	case "9c":
-		return piv.SlotSignature, nil
-	case "9d":
-		return piv.SlotKeyManagement, nil
-	case "9e":
-		return piv.SlotCardAuthentication, nil
-	default:
-		return piv.Slot{}, fmt.Errorf("unknown PIV slot %q (valid: 9a, 9c, 9d, 9e)", s)
-	}
+	return http.ListenAndServe(addr, reverseProxy)
 }

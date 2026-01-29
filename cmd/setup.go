@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 
+	"github.com/dsp/yubikey-kube-proxy/internal/proxy"
 	"github.com/spf13/cobra"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/tools/clientcmd/api"
@@ -41,7 +42,7 @@ func init() {
 
 func runSetup(cmd *cobra.Command, args []string) error {
 	// Validate slot upfront
-	if _, err := parseSlot(setupSlot); err != nil {
+	if _, err := proxy.ParseSlot(setupSlot); err != nil {
 		return err
 	}
 
