@@ -44,7 +44,8 @@ You can use these in your shell prompt to indicate when you're in a YubiKey sess
 
 Example:
   yubikey-kube-proxy shell --kubeconfig=proxy.yml --client-config=client.yml`,
-	RunE: runShell,
+	RunE:         runShell,
+	SilenceUsage: true, // Don't print usage on shell exit errors
 }
 
 func init() {
@@ -230,12 +231,12 @@ func runShell(cmd *cobra.Command, args []string) error {
 	default:
 	}
 
-	// Return shell error if any (but don't use os.Exit to preserve cleanup)
+	// Handle shell exit
 	if shellErr != nil {
 		if exitErr, ok := shellErr.(*exec.ExitError); ok {
-			// Shell exited with non-zero status - this is normal (e.g., user typed "exit 1")
-			// We return an error that includes the exit code for the caller to handle
-			return fmt.Errorf("shell exited with code %d", exitErr.ExitCode())
+			// Shell exited with non-zero status - this is normal (e.g., last command failed)
+			// Exit silently with the same code
+			os.Exit(exitErr.ExitCode())
 		}
 		return fmt.Errorf("shell error: %w", shellErr)
 	}
