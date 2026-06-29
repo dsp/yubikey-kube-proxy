@@ -21,7 +21,9 @@
 
           nativeBuildInputs = [ pkgs.pkg-config pkgs.makeWrapper ];
 
-          buildInputs = [ pkgs.pcsclite ];
+          # pcsclite is Linux-only; on macOS piv-go links the system PCSC
+          # framework instead.
+          buildInputs = pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.pcsclite ];
 
           # Ensure pcsclite is available at runtime
           postInstall = ''
@@ -29,7 +31,7 @@
               --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.yubikey-manager ]}
           '';
 
-          nativeCheckInputs = [ pkgs.pcsclite ];
+          nativeCheckInputs = pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.pcsclite ];
 
           meta = with pkgs.lib; {
             description = "A proxy for Kubernetes authentication using YubiKey";
@@ -54,10 +56,9 @@
           buildInputs = [
             pkgs.go
             pkgs.pkg-config
-            pkgs.pcsclite
             pkgs.yubikey-manager
             pkgs.kubectl
-          ];
+          ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.pcsclite ];
         };
       }
     ) // {
